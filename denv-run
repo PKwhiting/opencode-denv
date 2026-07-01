@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# denv-run <env> <command>
+#
+# Run <command> on the droplet configured for <env>, over a reused SSH
+# connection. The denv opencode plugin rewrites the agent's bash commands into
+# `denv-run <env> '<command>'` so the agent sees a clean wrapper instead of a
+# raw ssh/base64 blob (and doesn't try to "avoid the ssh"). The command is
+# base64-wrapped internally so its quoting can't break the remote shell.
+set -euo pipefail
+
+ENV="${1:-}"
+CMD="${2:-}"
+[ -n "$ENV" ] || { echo "usage: denv-run <env> <command>" >&2; exit 2; }
+
+ENVS="${DENV_ENVS:-$HOME/.config/opencode/denv-envs.json}"
+HOST="$(jq -r --arg e "$ENV" '.[$e].host // empty' "$ENVS" 2>/dev/null || true)"
+WS="$(jq -r --arg e "$ENV" '.[$e].workspace // "/"' "$ENVS" 2>/dev/null || echo /)"
+[ -n "$HOST" ] || { echo "denv-run: unknown env '$ENV' in $ENVS" >&2; exit 2; }
+
+CTL="$HOME/.denv/cm-$ENV.sock"
+mkdir -p "$HOME/.denv"
+B64="$(printf %s "$CMD" | base64 | tr -d '\n')"
+
+exec ssh \
+  -o BatchMode=yes \
+  -o StrictHostKeyChecking=accept-new \
+  -o ControlMaster=auto \
+  -o ControlPath="$CTL" \
+  -o ControlPersist=300 \
+  "$HOST" \
+  "cd '$WS' && printf %s '$B64' | base64 -d | bash -l"

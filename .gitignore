@@ -1,0 +1,5 @@
+.DS_Store
+envs.conf
+denv-envs.json
+.env
+.env.*

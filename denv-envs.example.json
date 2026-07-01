@@ -1,0 +1,4 @@
+{
+  "_comment": "Each key is an env name that must appear in a chat session's TITLE for that session to be routed to this host. Title a session 'dev1' (or anything containing 'dev1') and its shell commands run on this droplet. Copy this file to ~/.config/opencode/denv-envs.json, edit, and restart opencode. workspace is the dir each command cds into on the droplet.",
+  "dev1": { "host": "root@203.0.113.10", "workspace": "/" }
+}

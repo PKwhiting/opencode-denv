@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# remote-shell — the "shell" opencode uses inside a denv session.
+#
+# Instead of executing locally, every command is forwarded to the bound
+# droplet over a persistent SSH connection. There is no local execution
+# path here, so the agent physically cannot drift back to the local
+# machine — that is the lock.
+#
+# opencode invokes a shell as:  <shell> -c "<command>"
+# Confirm that contract on YOUR opencode build before trusting it: set
+# DENV_DEBUG=/path/to/log, run one command, and check the log (see README).
+set -euo pipefail
+
+# Refuse to run unless launched inside a denv session. If DENV_HOST is
+# unset there is deliberately NO local fallback — we just fail loudly.
+: "${DENV_HOST:?remote-shell: not in a denv session (launch via 'denv <env>')}"
+: "${DENV_WORKSPACE:=/workspace}"
+: "${DENV_CTL:=$HOME/.denv/cm-default.sock}"
+
+# Optional: record exactly how opencode invoked us, to confirm the contract.
+if [ -n "${DENV_DEBUG:-}" ]; then
+  { printf 'remote-shell argv:'; printf ' [%s]' "$@"; printf '\n'; } >>"$DENV_DEBUG"
+fi
+
+# The command opencode wants to run.
+if [ "${1:-}" = "-c" ]; then
+  CMD="${2:-}"
+else
+  CMD="$*"
+fi
+
+# base64-wrap the command so no quoting in it can break the remote shell.
+# Decoded into a variable on the droplet and run via `bash -lc "$CMD"`,
+# which leaves the command's stdin free (variable expansion is literal,
+# so any quotes/specials inside CMD are preserved exactly).
+CMD_B64="$(printf '%s' "$CMD" | base64 | tr -d '\n')"
+
+exec ssh \
+  -o ControlMaster=auto \
+  -o ControlPath="$DENV_CTL" \
+  -o ControlPersist=300 \
+  "$DENV_HOST" \
+  "cd \"$DENV_WORKSPACE\" && CMD=\"\$(printf %s '$CMD_B64' | base64 -d)\" && exec bash -lc \"\$CMD\""

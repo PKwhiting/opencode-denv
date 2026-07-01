@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# denv — launch an opencode session locked to a DigitalOcean droplet.
+#
+#   denv <env>        start a locked session for <env>
+#   denv ls           list configured environments
+#   denv stop <env>   drop the persistent SSH connection for <env>
+#
+# The session runs opencode locally (so your local MCPs/skills are in play)
+# but every shell command executes on the droplet, and opencode's local file
+# tools are disabled — so the agent reads/edits files only through that remote
+# shell. Nothing touches your live ~/.ssh/config or ~/.config/opencode;
+# connection options are passed explicitly and the per-session config is built
+# in memory from your global config.
+set -euo pipefail
+
+DENV_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WRAPPER="$DENV_HOME/bin/remote-shell"
+ENVS_CONF="${DENV_ENVS:-$DENV_HOME/envs.conf}"
+GLOBAL_CFG="${OPENCODE_GLOBAL_CONFIG:-$HOME/.config/opencode/opencode.json}"
+MNT_ROOT="$HOME/denv"
+CTL_ROOT="$HOME/.denv"
+
+die() { echo "denv: $*" >&2; exit 1; }
+
+# envs.conf rows:  <name> <user@host> <remote_workspace>
+lookup() { awk -v n="$1" '$0 !~ /^#/ && $1==n {print $2, $3}' "$ENVS_CONF"; }
+
+cmd="${1:-}"
+[ -n "$cmd" ] || die "usage: denv <env> | denv ls | denv stop <env>"
+
+if [ "$cmd" = "ls" ]; then
+  printf '%-12s %-24s %s\n' NAME HOST WORKSPACE
+  awk '$0 !~ /^#/ && NF {printf "%-12s %-24s %s\n", $1, $2, $3}' "$ENVS_CONF"
+  exit 0
+fi
+
+if [ "$cmd" = "stop" ]; then
+  name="${2:-}"; [ -n "$name" ] || die "usage: denv stop <env>"
+  read -r host ws < <(lookup "$name") || true
+  [ -n "${host:-}" ] || die "unknown env: $name"
+  ctl="$CTL_ROOT/cm-$name.sock"
+  ssh -o ControlPath="$ctl" -O exit "$host" 2>/dev/null || true
+  echo "denv: stopped $name"; exit 0
+fi
+
+name="$cmd"
+read -r host ws < <(lookup "$name") || true
+[ -n "${host:-}" ] || die "unknown env: $name (see 'denv ls')"
+ws="${ws:-/workspace}"
+
+command -v jq >/dev/null || die "jq not found — brew install jq"
+
+mkdir -p "$MNT_ROOT" "$CTL_ROOT"
+scratch="$MNT_ROOT/$name"; ctl="$CTL_ROOT/cm-$name.sock"
+mkdir -p "$scratch"
+
+# 1) Persistent control connection — the wrapper reuses this for every
+#    command, so per-command SSH is fast instead of a fresh handshake.
+ssh -o ControlMaster=auto -o ControlPath="$ctl" -o ControlPersist=300 -fN "$host" \
+  || die "could not open SSH connection to $host"
+
+# 2) Build the per-session opencode config: start from your GLOBAL config
+#    (keeps your MCPs/skills), force our remote shell, and disable the local
+#    file tools so the agent can ONLY touch files through that shell.
+base='{}'; [ -f "$GLOBAL_CFG" ] && base="$(cat "$GLOBAL_CFG")"
+merged="$(printf '%s' "$base" | jq --arg sh "$WRAPPER" \
+  '.shell=$sh | .tools = ((.tools // {}) + {read:false, write:false, edit:false, grep:false, glob:false, list:false})')" \
+  || die "could not build config — is $GLOBAL_CFG valid JSON?"
+
+# 3) Launch opencode locked to this env. cwd is an empty scratch dir; the
+#    agent sees and edits the droplet's files only via remote shell commands.
+export OPENCODE_CONFIG_CONTENT="$merged"
+export DENV_HOST="$host" DENV_WORKSPACE="$ws" DENV_CTL="$ctl"
+printf '\033]0;denv:%s\007' "$name"   # terminal title = tracking at a glance
+cd "$scratch"
+echo "denv: $name -> $host:$ws  — every command (and file op) runs on the droplet"
+exec opencode
