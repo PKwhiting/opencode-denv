@@ -5,12 +5,14 @@
   "description": "opencode plugin and helpers for pinning chat sessions to remote development environments.",
   "type": "module",
   "scripts": {
+    "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "shellcheck": "shellcheck denv denv-run bin/remote-shell"
   },
   "devDependencies": {
     "@opencode-ai/plugin": "1.14.20",
     "@types/node": "^22.20.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.0"
   }
 }

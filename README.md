@@ -1,5 +1,9 @@
 # opencode-denv
 
+[![CI](https://github.com/PKwhiting/opencode-denv/actions/workflows/ci.yml/badge.svg)](https://github.com/PKwhiting/opencode-denv/actions/workflows/ci.yml)
+[![TypeScript](https://img.shields.io/badge/TypeScript-strict-blue.svg)](tsconfig.json)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+
 `opencode-denv` pins individual opencode chat sessions to different remote
 development environments. A session chooses its environment from its title, and
 the plugin rewrites shell commands so they execute on the matching host over
@@ -42,6 +46,23 @@ Plugin mode is the recommended path.
 
 Sessions whose title does not match a configured environment continue to run
 locally unless `DENV_STRICT=1` is set.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  A[opencode chat session] --> B[Session title]
+  B --> C[denv plugin]
+  C --> D[denv-envs.json lookup]
+  D --> E{Environment match?}
+  E -- no --> F[Run locally]
+  E -- yes --> G[Inject remote-environment system note]
+  G --> H[Rewrite bash tool call]
+  H --> I[denv-run helper]
+  I --> J[SSH ControlMaster connection]
+  J --> K[Remote workspace]
+  E -- yes --> L[Deny local file tools]
+```
 
 ## Install plugin mode
 
@@ -101,6 +122,27 @@ To keep unmatched sessions from running locally, start opencode with:
 DENV_STRICT=1 opencode
 ```
 
+## Demo flow
+
+With this environment map:
+
+```json
+{
+  "dev1": { "host": "user@203.0.113.10", "workspace": "/workspace/app" },
+  "dev2": { "host": "user@203.0.113.20", "workspace": "/workspace/app" }
+}
+```
+
+Two opencode sessions can run side by side:
+
+| Session title | Agent command | Routed command | Result |
+| --- | --- | --- | --- |
+| `dev1 backend fix` | `hostname` | `denv-run dev1 'hostname'` | Runs on `dev1` |
+| `dev2 migration check` | `pwd` | `denv-run dev2 'pwd'` | Starts in `/workspace/app` on `dev2` |
+
+The model submits plain shell commands. The plugin performs the wrapping after
+the tool call is created, so the agent does not need to remember SSH details.
+
 ## Launcher mode
 
 The repository also includes an older launcher flow for one fully locked
@@ -133,6 +175,7 @@ Install dependencies and run validation:
 
 ```bash
 npm install
+npm test
 npm run typecheck
 npm run shellcheck
 ```

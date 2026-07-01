@@ -24,6 +24,9 @@ jobs:
       - name: Typecheck plugin
         run: npm run typecheck
 
+      - name: Run unit tests
+        run: npm test
+
       - name: Install shellcheck
         run: |
           sudo apt-get update

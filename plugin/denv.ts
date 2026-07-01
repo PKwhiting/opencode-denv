@@ -51,13 +51,30 @@ function loadEnvs(): Record<string, Env> {
 }
 
 // POSIX single-quote a string so it becomes one safe shell argument.
-function shSingleQuote(s: string): string {
+export function shSingleQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`
 }
 
 // Reverse of shSingleQuote's inner escaping: turn '\'' back into '.
-function shSingleUnquote(inner: string): string {
+export function shSingleUnquote(inner: string): string {
   return inner.replace(/'\\''/g, "'")
+}
+
+export function selectEnvForTitle(
+  title: string,
+  names: readonly string[],
+): string | null {
+  const normalizedTitle = title.toLowerCase()
+  let match: string | null = null
+  for (const name of names) {
+    if (
+      normalizedTitle.includes(name.toLowerCase()) &&
+      (match === null || name.length > match.length)
+    ) {
+      match = name
+    }
+  }
+  return match
 }
 
 // If the agent re-wrapped its command in our own helper — which it does because
@@ -67,7 +84,7 @@ function shSingleUnquote(inner: string): string {
 // session title, so a name the agent types is ignored). Loops a few times to
 // undo accidental double/triple wraps. Only matches when the WHOLE command is a
 // single wrapper, so a benign `cat denv-run` etc. is left alone.
-function stripSelfWrap(cmd: string): string {
+export function stripSelfWrap(cmd: string): string {
   let out = cmd.trim()
   const re = /^\S*denv-run\s+\S+\s+'([\s\S]*)'$/
   for (let i = 0; i < 5; i++) {
@@ -95,15 +112,7 @@ export const DenvPlugin: Plugin = async ({ client }) => {
       return null // can't resolve yet; don't cache, retry on next call
     }
     // Longest configured env name appearing in the title wins.
-    let match: string | null = null
-    for (const name of names) {
-      if (
-        title.includes(name.toLowerCase()) &&
-        (match === null || name.length > match.length)
-      ) {
-        match = name
-      }
-    }
+    const match = selectEnvForTitle(title, names)
     cache.set(sessionID, match)
     try {
       await client.app.log({
@@ -205,3 +214,5 @@ export const DenvPlugin: Plugin = async ({ client }) => {
     },
   }
 }
+
+export default DenvPlugin
