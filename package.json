@@ -1,0 +1,16 @@
+{
+  "name": "opencode-denv",
+  "version": "0.1.0",
+  "private": true,
+  "description": "opencode plugin and helpers for pinning chat sessions to remote development environments.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "shellcheck": "shellcheck denv denv-run bin/remote-shell"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "1.14.20",
+    "@types/node": "^22.20.0",
+    "typescript": "^5.9.3"
+  }
+}

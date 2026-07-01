@@ -3,3 +3,6 @@ envs.conf
 denv-envs.json
 .env
 .env.*
+node_modules/
+npm-debug.log*
+*.log

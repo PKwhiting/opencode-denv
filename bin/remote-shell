@@ -35,6 +35,7 @@ fi
 # so any quotes/specials inside CMD are preserved exactly).
 CMD_B64="$(printf '%s' "$CMD" | base64 | tr -d '\n')"
 
+# shellcheck disable=SC2029
 exec ssh \
   -o ControlMaster=auto \
   -o ControlPath="$DENV_CTL" \

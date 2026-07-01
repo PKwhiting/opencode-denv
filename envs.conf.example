@@ -1,0 +1,7 @@
+# denv launcher environments — one row per remote environment.
+# Columns:  <name>  <user@host>  <remote_workspace>
+# Lines starting with # are ignored.
+#
+# name        user@host               remote_workspace
+dev1          user@203.0.113.10       /workspace/app
+dev2          user@203.0.113.20       /workspace/app

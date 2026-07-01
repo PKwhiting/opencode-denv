@@ -1,102 +1,169 @@
-# denv — lock opencode sessions to remote droplets
+# opencode-denv
 
-Run **one** opencode instance with each **chat session** pinned to its own
-DigitalOcean droplet. A session picks its environment by its **title**: title a
-session so it contains a configured env name (e.g. `dev1`), and every shell
-command in that session runs on that droplet over SSH. Your local MCPs/skills
-are shared across all sessions; sessions stay isolated from each other.
+`opencode-denv` pins individual opencode chat sessions to different remote
+development environments. A session chooses its environment from its title, and
+the plugin rewrites shell commands so they execute on the matching host over
+SSH.
 
-## Two approaches in this repo
+This lets one opencode instance manage multiple isolated remote workspaces
+without swapping terminals, changing global config, or asking the model to
+remember which machine it is using.
 
-- **Plugin (recommended) — `plugin/denv.ts`:** many env-locked sessions inside
-  one opencode instance, routed by session title. This is the one you want.
-- **Launcher (alternative) — `denv` + `bin/remote-shell`:** one separate,
-  fully-locked opencode instance per env, each in its own terminal/tmux window.
-  Simpler model, but one instance per environment.
+## What it demonstrates
 
-The rest of this file covers the plugin.
+- opencode plugin hooks for tool-call interception and system prompt injection.
+- Per-session routing using opencode session metadata.
+- Safe SSH command forwarding with stable quoting and reused ControlMaster
+  connections.
+- Agent guardrails that prevent accidental nested SSH and local file access in
+  remote-bound sessions.
+- A small launcher alternative for fully locked one-environment sessions.
 
-## How it works
+## How plugin mode works
 
-- The `tool.execute.before` hook fires before every tool call with the
-  `sessionID`. The plugin looks up that session's title, matches it to a
-  configured env, and rewrites each `bash` command to `denv-run <env> '<cmd>'`.
-  The `denv-run` helper does the SSH (base64-wrapped so quoting can't break;
-  ControlMaster reused for speed), so the agent sees a clean wrapper instead of
-  a raw ssh/base64 blob it would otherwise try to "avoid".
-- opencode's file tools (`read`/`write`/`edit`/`grep`/`glob`/`list`) can't be
-  redirected to a remote, so on a bound session they're **denied** — the agent
-  does file work through the (remote) shell. MCP/web tools run locally.
-- Sessions whose title matches no env run **normally (local)**. Set
-  `DENV_STRICT=1` to deny those instead (good for a droplets-only instance).
-- Two guards stop the agent getting confused about local-vs-remote:
-  - **System note (every turn):** for a bound session the plugin injects a
-    system instruction telling the model it's already inside the env, so it
-    runs commands directly and never tries to `ssh` in.
-  - **Anti-double-ssh:** any command that tries to `ssh` back into the env's
-    own host is blocked with a clear error (it would otherwise nest ssh and
-    fail with `Permission denied (publickey)`).
+Plugin mode is the recommended path.
 
-No global opencode config changes: file tools are disabled per bound session by
-the plugin, not globally — so other local sessions are unaffected.
+1. `tool.execute.before` receives each tool call and the current `sessionID`.
+2. The plugin reads the session title and finds the longest matching environment
+   name from `denv-envs.json`.
+3. Matching sessions have `bash` commands rewritten to:
 
-## Install
-
-1. Env map — copy and edit:
+   ```bash
+   denv-run <env> '<command>'
    ```
-   cp ~/Desktop/PROJECTS/opencode-denv/denv-envs.example.json ~/.config/opencode/denv-envs.json
-   # edit it: add your droplets ({ "<name>": { "host": "root@ip", "workspace": "/" } })
-   ```
-2. Plugin — link it into opencode's global plugin dir (copy if symlinks aren't followed):
-   ```
-   mkdir -p ~/.config/opencode/plugins
-   ln -sf ~/Desktop/PROJECTS/opencode-denv/plugin/denv.ts ~/.config/opencode/plugins/denv.ts
-   ```
-3. Helper — the plugin shells out to `denv-run` (it does the SSH). Link it where
-   the plugin looks by default:
-   ```
-   ln -sf ~/Desktop/PROJECTS/opencode-denv/denv-run ~/.config/opencode/denv-run
-   ```
-   (Optional: also put it on PATH — e.g. `ln -sf … ~/.opencode/bin/denv-run` — and
-   set `DENV_RUN=denv-run` for a shorter command display.)
-4. Restart opencode.
 
-Prereq: key-based SSH to each droplet — `ssh root@<ip> hostname` must work
-without a password prompt.
+4. `denv-run` performs the SSH call, base64-wraps the command to preserve
+   quoting, and starts in the configured remote workspace.
+5. File tools such as `read`, `edit`, `grep`, and `glob` are denied in bound
+   sessions because opencode cannot redirect those tools to the remote host.
+   The agent uses shell commands for remote file inspection and edits instead.
+6. A system note is injected for bound sessions so the model understands that it
+   is already operating inside the selected remote environment.
 
-## Use
+Sessions whose title does not match a configured environment continue to run
+locally unless `DENV_STRICT=1` is set.
 
-1. Start opencode (one instance).
-2. Create a chat session and **title it after an env** — e.g. `dev1` (the title
-   just has to contain the name). Its shell commands now run on `dev1`.
-3. Create another session titled `dev2`, a third `dev3`, etc. — all in the same
-   instance, each locked to its own droplet, running concurrently.
-4. In a session, ask the agent to run `hostname` — it should print that
-   droplet's name.
+## Install plugin mode
 
-## Verify on first run
+Prerequisites:
 
-- Title a session `dev1`, ask it to run `hostname` → expect the droplet's name
-  (`snapshots-…`), not your Mac.
-- Open a second session titled `dev2` and confirm its commands go to `dev2`, not
-  `dev1` — proving per-session isolation.
-- opencode's logs should show `denv: session <id> -> dev1` lines.
-- If a session runs locally when you expected remote, its title didn't match —
-  make sure it contains the env name exactly as spelled in `denv-envs.json`.
+- opencode installed locally.
+- `jq` available locally.
+- Key-based SSH access to each remote host.
+- `@opencode-ai/plugin` available where opencode loads plugins. For local
+  development, run `npm install` in this repository.
+
+Clone the repository:
+
+```bash
+git clone https://github.com/PKwhiting/opencode-denv.git
+cd opencode-denv
+```
+
+Create an environment map:
+
+```bash
+mkdir -p ~/.config/opencode
+cp denv-envs.example.json ~/.config/opencode/denv-envs.json
+```
+
+Edit `~/.config/opencode/denv-envs.json`:
+
+```json
+{
+  "dev1": { "host": "user@203.0.113.10", "workspace": "/workspace/app" },
+  "dev2": { "host": "user@203.0.113.20", "workspace": "/workspace/app" }
+}
+```
+
+Link the plugin and helper into opencode's global config directory:
+
+```bash
+mkdir -p ~/.config/opencode/plugins
+ln -sf "$PWD/plugin/denv.ts" ~/.config/opencode/plugins/denv.ts
+ln -sf "$PWD/denv-run" ~/.config/opencode/denv-run
+```
+
+Restart opencode after linking the plugin or changing `denv-envs.json`.
+
+## Use plugin mode
+
+1. Start opencode normally.
+2. Create or rename a chat session so the title contains an environment name,
+   such as `dev1`.
+3. Ask the agent to run `hostname` or `pwd`.
+4. Confirm the command runs on the remote host and starts in the configured
+   workspace.
+
+To keep unmatched sessions from running locally, start opencode with:
+
+```bash
+DENV_STRICT=1 opencode
+```
+
+## Launcher mode
+
+The repository also includes an older launcher flow for one fully locked
+opencode instance per environment. Plugin mode is usually more convenient, but
+launcher mode is useful when every shell invocation must be routed through a
+custom shell wrapper.
+
+Create launcher config:
+
+```bash
+cp envs.conf.example envs.conf
+```
+
+Edit `envs.conf`, then run:
+
+```bash
+./denv ls
+./denv dev1
+```
+
+Stop a reused SSH control connection with:
+
+```bash
+./denv stop dev1
+```
+
+## Development
+
+Install dependencies and run validation:
+
+```bash
+npm install
+npm run typecheck
+npm run shellcheck
+```
+
+`shellcheck` must be installed separately for local shell validation. The CI
+workflow installs it on Ubuntu.
+
+## Configuration files
+
+| File | Purpose | Commit real values? |
+| --- | --- | --- |
+| `denv-envs.example.json` | Example plugin-mode environment map | Yes |
+| `~/.config/opencode/denv-envs.json` | Real plugin-mode environment map | No |
+| `envs.conf.example` | Example launcher-mode environment map | Yes |
+| `envs.conf` | Real launcher-mode environment map | No |
 
 ## Known limitations
 
-- **File edits go through the shell** (`cat`/`sed`/heredocs) — fine for
-  command/build/test/git work, clunkier for big refactors.
-- **Each command is a fresh remote shell** — `cd`, env vars, and venvs don't
-  persist across separate tool calls (each command starts in the workspace dir).
-  Chain dependent steps in one command.
-- **Interactive/TTY commands** aren't supported over the per-command forward.
-- **Restart opencode after editing `denv-envs.json`** (loaded once at startup).
+- File reads and edits in bound plugin sessions go through remote shell commands
+  such as `cat`, `sed`, and heredocs.
+- Each tool call starts a fresh remote shell in the configured workspace. Chain
+  dependent commands if a `cd`, virtualenv activation, or exported variable must
+  apply to multiple operations.
+- Interactive TTY commands are not supported by the per-command SSH forwarding
+  path.
+- opencode loads plugins and config at startup, so restart opencode after
+  changing plugin files, helper scripts, or environment maps.
 
-## Verified
+## Security notes
 
-The exact SSH command the plugin generates was tested against a live droplet:
-`hostname`, `pwd`, and a root-filesystem listing all ran on the droplet, not
-locally. The remaining first-run checks (above) confirm opencode's hook
-behavior on your build.
+This tool intentionally forwards model-produced shell commands to remote hosts.
+Use it only with development environments that are safe for agent-driven work.
+Keep real hosts, usernames, and workspace paths out of committed config files;
+see [SECURITY.md](SECURITY.md) for details.

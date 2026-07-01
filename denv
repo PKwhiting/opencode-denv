@@ -60,11 +60,11 @@ ssh -o ControlMaster=auto -o ControlPath="$ctl" -o ControlPersist=300 -fN "$host
   || die "could not open SSH connection to $host"
 
 # 2) Build the per-session opencode config: start from your GLOBAL config
-#    (keeps your MCPs/skills), force our remote shell, and disable the local
-#    file tools so the agent can ONLY touch files through that shell.
-base='{}'; [ -f "$GLOBAL_CFG" ] && base="$(cat "$GLOBAL_CFG")"
+#    (keeps your MCPs/skills), force our remote shell, and deny local file
+#    tools so the agent can ONLY touch files through that shell.
+base='{}'; [ -f "$GLOBAL_CFG" ] && base="$(<"$GLOBAL_CFG")"
 merged="$(printf '%s' "$base" | jq --arg sh "$WRAPPER" \
-  '.shell=$sh | .tools = ((.tools // {}) + {read:false, write:false, edit:false, grep:false, glob:false, list:false})')" \
+  '.shell=$sh | .permission = ((.permission | if type == "object" then . else {} end) + {read:"deny", edit:"deny", grep:"deny", glob:"deny", list:"deny"})')" \
   || die "could not build config — is $GLOBAL_CFG valid JSON?"
 
 # 3) Launch opencode locked to this env. cwd is an empty scratch dir; the
