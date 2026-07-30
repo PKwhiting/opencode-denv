@@ -41,7 +41,10 @@ Plugin mode is the recommended path.
 5. File tools such as `read`, `edit`, `grep`, and `glob` are denied in bound
    sessions because opencode cannot redirect those tools to the remote host.
    The agent uses shell commands for remote file inspection and edits instead.
-6. A system note is injected for bound sessions so the model understands that it
+6. User-opened terminals can use `denv-terminal-shell` as opencode's configured
+   shell. It shows an environment picker for interactive terminals and delegates
+   non-interactive `-c` shell tool invocations to normal bash.
+7. A system note is injected for bound sessions so the model understands that it
    is already operating inside the selected remote environment.
 
 Sessions whose title does not match a configured environment continue to run
@@ -103,6 +106,17 @@ Link the plugin and helper into opencode's global config directory:
 mkdir -p ~/.config/opencode/plugins
 ln -sf "$PWD/plugin/denv.ts" ~/.config/opencode/plugins/denv.ts
 ln -sf "$PWD/denv-run" ~/.config/opencode/denv-run
+ln -sf "$PWD/denv-shell" ~/.config/opencode/denv-shell
+ln -sf "$PWD/denv-terminal-shell" ~/.config/opencode/denv-terminal-shell
+```
+
+To show a picker when opening new opencode terminals, set opencode's global
+shell to the wrapper:
+
+```json
+{
+  "shell": "~/.config/opencode/denv-terminal-shell"
+}
 ```
 
 Restart opencode after linking the plugin or changing `denv-envs.json`.
@@ -115,6 +129,10 @@ Restart opencode after linking the plugin or changing `denv-envs.json`.
 3. Ask the agent to run `hostname` or `pwd`.
 4. Confirm the command runs on the remote host and starts in the configured
    workspace.
+
+For manual terminal access, open a new terminal and choose `local` or one of the
+configured environments from the prompt. Existing terminals stay connected to
+the environment selected when they were opened.
 
 To keep unmatched sessions from running locally, start opencode with:
 
@@ -201,6 +219,8 @@ workflow installs it on Ubuntu.
   apply to multiple operations.
 - Interactive TTY commands are not supported by the per-command SSH forwarding
   path.
+- The terminal picker is manual by design. It affects only the new terminal being
+  opened and does not infer the target from the current chat session.
 - opencode loads plugins and config at startup, so restart opencode after
   changing plugin files, helper scripts, or environment maps.
 

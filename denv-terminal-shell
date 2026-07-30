@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# denv-terminal-shell
+#
+# Configure opencode's `shell` to this wrapper. Non-interactive shell tool calls
+# arrive as `-c <command>` and are delegated to real bash. Interactive terminal
+# launches arrive with no args and show an environment picker.
+set -euo pipefail
+
+REAL_SHELL="${DENV_REAL_SHELL:-/usr/bin/bash}"
+ENVS="${DENV_ENVS:-$HOME/.config/opencode/denv-envs.json}"
+DENV_SHELL="${DENV_SHELL:-$HOME/.config/opencode/denv-shell}"
+
+if [ "$#" -gt 0 ]; then
+  exec "$REAL_SHELL" "$@"
+fi
+
+if [ ! -t 0 ]; then
+  exec "$REAL_SHELL" -l
+fi
+
+if ! command -v jq >/dev/null 2>&1; then
+  printf 'denv-terminal-shell: jq is required; starting local shell.\n' >&2
+  exec "$REAL_SHELL" -l
+fi
+
+mapfile -t env_names < <(jq -r 'keys[] | select(. != "_comment")' "$ENVS" 2>/dev/null | sort)
+
+printf '\nSelect terminal environment:\n\n'
+printf '  0. local\n'
+index=1
+for env_name in "${env_names[@]}"; do
+  host="$(jq -r --arg e "$env_name" '.[$e].host // ""' "$ENVS")"
+  workspace="$(jq -r --arg e "$env_name" '.[$e].workspace // "/"' "$ENVS")"
+  printf '  %d. %s  (%s:%s)\n' "$index" "$env_name" "$host" "$workspace"
+  index=$((index + 1))
+done
+printf '\nEnter number or env name [0]: '
+
+if ! IFS= read -r choice; then
+  printf '\n'
+  exit 0
+fi
+
+choice="${choice:-0}"
+if [ "$choice" = "0" ] || [ "$choice" = "local" ]; then
+  exec "$REAL_SHELL" -l
+fi
+
+selected=""
+if [[ "$choice" =~ ^[0-9]+$ ]]; then
+  if [ "$choice" -ge 1 ] && [ "$choice" -le "${#env_names[@]}" ]; then
+    selected="${env_names[$((choice - 1))]}"
+  fi
+else
+  for env_name in "${env_names[@]}"; do
+    if [ "$choice" = "$env_name" ]; then
+      selected="$env_name"
+      break
+    fi
+  done
+fi
+
+if [ -z "$selected" ]; then
+  printf 'Unknown environment: %s\n' "$choice" >&2
+  printf 'Starting local shell.\n' >&2
+  exec "$REAL_SHELL" -l
+fi
+
+exec "$DENV_SHELL" "$selected"

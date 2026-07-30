@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# denv-shell <env>
+#
+# Start an interactive login shell on the droplet configured for <env>. This is
+# used by opencode's PTY launch hook so user-opened terminals are remote from
+# process start, not redirected later by shell startup files.
+set -euo pipefail
+
+ENV="${1:-}"
+[ -n "$ENV" ] || { echo "usage: denv-shell <env>" >&2; exit 2; }
+
+ENVS="${DENV_ENVS:-$HOME/.config/opencode/denv-envs.json}"
+HOST="$(jq -r --arg e "$ENV" '.[$e].host // empty' "$ENVS" 2>/dev/null || true)"
+WS="$(jq -r --arg e "$ENV" '.[$e].workspace // "/"' "$ENVS" 2>/dev/null || echo /)"
+[ -n "$HOST" ] || { echo "denv-shell: unknown env '$ENV' in $ENVS" >&2; exit 2; }
+
+CTL="$HOME/.denv/cm-$ENV.sock"
+mkdir -p "$HOME/.denv"
+WS_B64="$(printf %s "$WS" | base64 | tr -d '\n')"
+
+# shellcheck disable=SC2029
+exec ssh \
+  -tt \
+  -o BatchMode=yes \
+  -o StrictHostKeyChecking=accept-new \
+  -o ControlMaster=auto \
+  -o ControlPath="$CTL" \
+  -o ControlPersist=300 \
+  "$HOST" \
+  "WS=\$(printf %s '$WS_B64' | base64 -d) && cd \"\$WS\" && exec bash -l"

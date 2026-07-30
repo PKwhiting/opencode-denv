@@ -7,7 +7,7 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "shellcheck": "shellcheck denv denv-run bin/remote-shell"
+    "shellcheck": "shellcheck denv denv-run denv-shell denv-terminal-shell bin/remote-shell"
   },
   "devDependencies": {
     "@opencode-ai/plugin": "1.14.20",
