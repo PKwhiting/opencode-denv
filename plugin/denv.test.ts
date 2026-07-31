@@ -1,11 +1,21 @@
 import { describe, expect, it } from "vitest"
 
+import plugin from "./denv.js"
 import {
+  parseDenvSessionCommand,
+  selectEnvByName,
   selectEnvForTitle,
   shSingleQuote,
   shSingleUnquote,
   stripSelfWrap,
 } from "./denv.js"
+
+describe("default plugin export", () => {
+  it("uses the v1 object shape so named test exports are not loaded as plugins", () => {
+    expect(plugin.id).toBe("opencode-denv")
+    expect(plugin.server).toBeTypeOf("function")
+  })
+})
 
 describe("selectEnvForTitle", () => {
   it("matches environment names case-insensitively", () => {
@@ -20,6 +30,41 @@ describe("selectEnvForTitle", () => {
 
   it("returns null when the title is not bound to an environment", () => {
     expect(selectEnvForTitle("local notes", ["dev1", "dev2"])).toBeNull()
+  })
+})
+
+describe("selectEnvByName", () => {
+  it("matches environment names case-insensitively", () => {
+    expect(selectEnvByName("PRODUCTION", ["dev1", "production"])).toBe("production")
+  })
+
+  it("returns null for unknown environment names", () => {
+    expect(selectEnvByName("missing", ["dev1", "production"])).toBeNull()
+  })
+})
+
+describe("parseDenvSessionCommand", () => {
+  const names = ["dev-environ-5", "production"]
+
+  it("parses status commands", () => {
+    expect(parseDenvSessionCommand("denv", names)).toEqual({ kind: "status" })
+    expect(parseDenvSessionCommand("denv status", names)).toEqual({ kind: "status" })
+  })
+
+  it("parses environment switches", () => {
+    expect(parseDenvSessionCommand("denv use PRODUCTION", names)).toEqual({
+      kind: "use",
+      env: "production",
+    })
+  })
+
+  it("parses local and reset controls", () => {
+    expect(parseDenvSessionCommand("denv local", names)).toEqual({ kind: "use", env: null })
+    expect(parseDenvSessionCommand("denv reset", names)).toEqual({ kind: "reset" })
+  })
+
+  it("ignores non-denv commands", () => {
+    expect(parseDenvSessionCommand("pwd", names)).toBeNull()
   })
 })
 

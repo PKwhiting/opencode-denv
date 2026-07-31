@@ -15,11 +15,26 @@ CMD="${2:-}"
 ENVS="${DENV_ENVS:-$HOME/.config/opencode/denv-envs.json}"
 HOST="$(jq -r --arg e "$ENV" '.[$e].host // empty' "$ENVS" 2>/dev/null || true)"
 WS="$(jq -r --arg e "$ENV" '.[$e].workspace // "/"' "$ENVS" 2>/dev/null || echo /)"
+REMOTE_SHELL="$(jq -r --arg e "$ENV" '.[$e].shell // "posix"' "$ENVS" 2>/dev/null || echo posix)"
 [ -n "$HOST" ] || { echo "denv-run: unknown env '$ENV' in $ENVS" >&2; exit 2; }
 
 CTL="$HOME/.denv/cm-$ENV.sock"
 mkdir -p "$HOME/.denv"
 B64="$(printf %s "$CMD" | base64 | tr -d '\n')"
+WS_B64="$(printf %s "$WS" | base64 | tr -d '\n')"
+
+case "$REMOTE_SHELL" in
+  posix | "")
+    REMOTE_COMMAND="WS=\$(printf %s '$WS_B64' | base64 -d) && cd \"\$WS\" && printf %s '$B64' | base64 -d | bash -l"
+    ;;
+  wsl | windows-wsl | windows_wsl)
+    REMOTE_COMMAND="wsl.exe --exec bash -lc \"WS=\$(printf %s $WS_B64 | base64 -d) && cd \\\"\$WS\\\" && printf %s $B64 | base64 -d | bash -l\""
+    ;;
+  *)
+    echo "denv-run: unsupported shell '$REMOTE_SHELL' for env '$ENV'" >&2
+    exit 2
+    ;;
+esac
 
 # shellcheck disable=SC2029
 exec ssh \
@@ -29,4 +44,4 @@ exec ssh \
   -o ControlPath="$CTL" \
   -o ControlPersist=300 \
   "$HOST" \
-  "cd '$WS' && printf %s '$B64' | base64 -d | bash -l"
+  "$REMOTE_COMMAND"

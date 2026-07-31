@@ -50,6 +50,29 @@ Plugin mode is the recommended path.
 Sessions whose title does not match a configured environment continue to run
 locally unless `DENV_STRICT=1` is set.
 
+## Switch environments inside a session
+
+Title matching is only the default. A chat session can override its environment
+by submitting one of these bash commands:
+
+```bash
+denv list              # show configured environments
+denv status            # show this session's current routing
+denv use dev1          # route future bash commands to dev1
+denv local             # run future bash commands locally
+denv reset             # remove the override and go back to title matching
+```
+
+Overrides are stored by opencode session ID in
+`~/.config/opencode/denv-session-envs.json`, so they survive opencode restarts.
+The agent sees a system reminder listing these controls and can switch routing
+when asked without requiring the session title to change.
+
+Sub-agent sessions inherit the parent session's explicit environment override.
+For example, after `denv use dev-environ-7`, tasks launched with the `task`
+tool also route their bash commands to `dev-environ-7`. A sub-agent can set its
+own override with `denv use <env>` if it needs a different target.
+
 ## Architecture
 
 ```mermaid
@@ -96,9 +119,14 @@ Edit `~/.config/opencode/denv-envs.json`:
 ```json
 {
   "dev1": { "host": "user@203.0.113.10", "workspace": "/workspace/app" },
-  "dev2": { "host": "user@203.0.113.20", "workspace": "/workspace/app" }
+  "dev2": { "host": "user@203.0.113.20", "workspace": "/workspace/app" },
+  "windows-wsl": { "host": "stovetop", "workspace": "/", "shell": "wsl" }
 }
 ```
+
+Linux/POSIX SSH hosts use `shell: "posix"` by default. Windows OpenSSH hosts
+whose default shell is `cmd.exe` can set `shell: "wsl"`; `denv-run` and
+`denv-shell` will enter the default WSL distribution and run `bash` there.
 
 Link the plugin and helper into opencode's global config directory:
 
@@ -207,6 +235,7 @@ workflow installs it on Ubuntu.
 | --- | --- | --- |
 | `denv-envs.example.json` | Example plugin-mode environment map | Yes |
 | `~/.config/opencode/denv-envs.json` | Real plugin-mode environment map | No |
+| `~/.config/opencode/denv-session-envs.json` | Per-session environment overrides | No |
 | `envs.conf.example` | Example launcher-mode environment map | Yes |
 | `envs.conf` | Real launcher-mode environment map | No |
 
