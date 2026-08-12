@@ -3,15 +3,15 @@
 // One opencode instance, many chat sessions, each pinned to its own droplet.
 // A session picks its environment by its TITLE: title a session so it contains
 // a configured env name (e.g. "dev1"), and every shell command in that session
-// is rewritten to run on that droplet over SSH. Sessions whose title matches no
+// is routed to that droplet over SSH. Sessions whose title matches no
 // env behave normally (local) — unless DENV_STRICT=1, which denies them.
 //
 // Config: ~/.config/opencode/denv-envs.json
 //   { "dev1": { "host": "root@1.2.3.4", "workspace": "/" }, ... }
 //
-// Why bash-only: the hook can rewrite a command but can't redirect opencode's
-// file tools to a remote, so on a bound session those are denied and the agent
-// does file work through the (remote) shell. MCP/web tools run locally as usual.
+// Why shell-only: the shell.env hook can route the built-in shell executor while
+// preserving the command shown to the agent. File tools still cannot be redirected
+// to a remote, so bound sessions deny them and use the remote shell instead.
 
 import type { Plugin } from "@opencode-ai/plugin"
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
@@ -24,9 +24,8 @@ const ENVS_PATH =
 const SESSION_ENVS_PATH =
   process.env.DENV_SESSION_ENVS || join(HOME, ".config", "opencode", "denv-session-envs.json")
 const STRICT = process.env.DENV_STRICT === "1"
-// The helper that actually SSHes. Absolute path by default so it resolves
-// regardless of opencode's bash PATH; set DENV_RUN to just "denv-run" if you've
-// put it on PATH and prefer a shorter command display.
+// The helper used by denv-terminal-shell for remote execution. Keep it absolute
+// by default so the adapter resolves it regardless of opencode's shell PATH.
 const DENV_RUN =
   process.env.DENV_RUN || join(HOME, ".config", "opencode", "denv-run")
 
@@ -39,6 +38,7 @@ const FILE_TOOLS = new Set([
   "glob",
   "list",
 ])
+const LOCAL_SHELL_CALLS = new Set<string>()
 
 type Env = { host: string; workspace?: string }
 type SessionEnvOverride = string | null
@@ -115,32 +115,49 @@ export function selectEnvByName(input: string, names: readonly string[]): string
 }
 
 export function parseDenvSessionCommand(cmd: string, names: readonly string[]): DenvSessionCommand | null {
-  const parts = cmd.trim().split(/\s+/).filter(Boolean)
-  if (parts[0] !== "denv") return null
+  const withoutComment = cmd.trim().replace(/\s+#.*$/, "")
+  const parts = withoutComment
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.replace(/^(['"])(.*)\1$/, "$2"))
+  const executable = parts[0] ?? ""
+  const executableName = executable.replace(/\\/g, "/").split("/").pop()
+  if (executableName !== "denv") return null
+  if (parts.includes("--help") || parts.includes("-h")) return { kind: "list" }
   const action = (parts[1] ?? "status").toLowerCase()
 
-  if (parts.length === 1 || action === "status" || action === "env") return { kind: "status" }
-  if (action === "list" || action === "ls") return { kind: "list" }
-  if (action === "reset" || action === "title") return { kind: "reset" }
-  if (action === "local") return { kind: "use", env: null }
+  if (parts.length === 1) return { kind: "status" }
+  if (parts.length === 2) {
+    if (action === "status" || action === "env" || action === "--status") {
+      return { kind: "status" }
+    }
+    if (action === "list" || action === "ls" || action === "help" || action === "--help" || action === "-h") {
+      return { kind: "list" }
+    }
+    if (action === "reset" || action === "title") return { kind: "reset" }
+    if (action === "local" || action === "--local") return { kind: "use", env: null }
+    if (action === "use" || action === "switch") return { kind: "list" }
 
-  if (action === "use") {
+    const directEnvironment = selectEnvByName(action, names)
+    if (directEnvironment) return { kind: "use", env: directEnvironment }
+  }
+
+  if ((action === "use" || action === "switch") && parts.length === 3) {
     const requested = parts[2]
-    if (!requested) return { kind: "list" }
-    if (requested.toLowerCase() === "local") return { kind: "use", env: null }
+    if (requested.toLowerCase() === "local" || requested.toLowerCase() === "--local") {
+      return { kind: "use", env: null }
+    }
     return { kind: "use", env: selectEnvByName(requested, names) ?? requested }
   }
 
   return { kind: "unknown", env: action }
 }
 
-// If the agent re-wrapped its command in our own helper — which it does because
-// it sees its commands rendered as `denv-run <env> '...'` and imitates that form
-// on later turns — peel the wrapper back off so we don't double-wrap. Handles
-// the bare and absolute-path forms, and any typed env name (routing is by
-// session title, so a name the agent types is ignored). Loops a few times to
-// undo accidental double/triple wraps. Only matches when the WHOLE command is a
-// single wrapper, so a benign `cat denv-run` etc. is left alone.
+// Compatibility for commands copied from transcripts produced before transport
+// forwarding became hidden. Peel the wrapper back off so it cannot be nested.
+// Handles bare and absolute-path forms and loops a few times for accidental
+// double/triple wraps. Only matches when the WHOLE command is a single wrapper,
+// so a benign `cat denv-run` etc. is left alone.
 export function stripSelfWrap(cmd: string): string {
   let out = cmd.trim()
   const re = /^\S*denv-run\s+\S+\s+'([\s\S]*)'$/
@@ -160,20 +177,24 @@ export const DenvPlugin: Plugin = async ({ client }) => {
   const envs = loadEnvs()
   const names = Object.keys(envs)
   const cache = new Map<string, string | null>() // sessionID -> env name | null
-  const overrides = loadSessionEnvOverrides() // sessionID -> env name | null for local
   const sessionInfoCache = new Map<string, SessionInfo>()
 
-  function overrideFor(sessionID: string): SessionEnvOverride | undefined {
+  function overrideFor(
+    overrides: Readonly<Record<string, SessionEnvOverride>>,
+    sessionID: string,
+  ): SessionEnvOverride | undefined {
     if (!Object.prototype.hasOwnProperty.call(overrides, sessionID)) return undefined
     return overrides[sessionID] ?? null
   }
 
   function setOverride(sessionID: string, env: SessionEnvOverride): void {
+    const overrides = loadSessionEnvOverrides()
     overrides[sessionID] = env
     saveSessionEnvOverrides(overrides)
   }
 
   function clearOverride(sessionID: string): void {
+    const overrides = loadSessionEnvOverrides()
     delete overrides[sessionID]
     saveSessionEnvOverrides(overrides)
   }
@@ -195,17 +216,18 @@ export const DenvPlugin: Plugin = async ({ client }) => {
 
   async function inheritedOverride(
     sessionID: string,
+    overrides: Readonly<Record<string, SessionEnvOverride>>,
     visited: Set<string> = new Set(),
   ): Promise<{ found: boolean; env: SessionEnvOverride }> {
     if (visited.has(sessionID)) return { found: false, env: null }
     visited.add(sessionID)
 
-    const own = overrideFor(sessionID)
+    const own = overrideFor(overrides, sessionID)
     if (own !== undefined) return { found: true, env: own }
 
     const info = await sessionInfo(sessionID)
     if (!info?.parentID) return { found: false, env: null }
-    return inheritedOverride(info.parentID, visited)
+    return inheritedOverride(info.parentID, overrides, visited)
   }
 
   function envList(): string {
@@ -216,9 +238,10 @@ export const DenvPlugin: Plugin = async ({ client }) => {
   }
 
   async function envStatus(sessionID: string): Promise<string> {
-    const override = await inheritedOverride(sessionID)
+    const overrides = loadSessionEnvOverrides()
+    const override = await inheritedOverride(sessionID, overrides)
     if (override.found) {
-      const source = overrideFor(sessionID) !== undefined ? "session override" : "parent session override"
+      const source = overrideFor(overrides, sessionID) !== undefined ? "session override" : "parent session override"
       return override.env ? `denv: using ${override.env} (${source})` : `denv: using local (${source})`
     }
     const env = await resolveEnvFromTitle(sessionID)
@@ -258,7 +281,7 @@ export const DenvPlugin: Plugin = async ({ client }) => {
   }
 
   async function resolveEnv(sessionID: string): Promise<string | null> {
-    const override = await inheritedOverride(sessionID)
+    const override = await inheritedOverride(sessionID, loadSessionEnvOverrides())
     const match = override.found ? override.env : await resolveEnvFromTitle(sessionID)
     try {
       await client.app.log({
@@ -275,9 +298,8 @@ export const DenvPlugin: Plugin = async ({ client }) => {
   }
 
   return {
-    // Guard #1: tell the model, every turn, that it's already inside the
-    // environment — so it never tries to ssh in the first place. Only fires
-    // for bound sessions; others are left untouched. (experimental hook.)
+    // Tell the model which environment is active without exposing the transport
+    // command. Shell execution is routed by the shell.env hook below.
     "experimental.chat.system.transform": async (
       input: { sessionID?: string },
       output: { system?: string[] },
@@ -300,11 +322,9 @@ export const DenvPlugin: Plugin = async ({ client }) => {
         output.system.push(
           `<denv-environment>\n` +
             `You are operating INSIDE the remote environment "${env}" (${cfg.host}); ` +
-            `every bash command already runs there. After you submit a command it is ` +
-            `AUTOMATICALLY wrapped (you'll see it displayed as \`denv-run ${env} '...'\`) — ` +
-            `that happens on its own, AFTER you submit. Submit ONLY the plain command. ` +
-            `Never type "denv-run", "ssh", or "${cfg.host}" yourself; such commands are ` +
-            `rejected. Correct: \`ls /root\`  —  Wrong: \`denv-run ${env} 'ls /root'\`. ` +
+            `every shell command already runs there. Submit only ordinary shell commands; ` +
+            `the transport is handled automatically and is not part of the command. ` +
+            `Never type "denv-run", "ssh", or "${cfg.host}" yourself. ` +
             `The file tools (read/write/edit/grep/glob/list) are disabled here, so inspect ` +
             `and edit files with shell commands (cat, sed, ls, grep). ` +
             `Default working directory: ${cfg.workspace || "/"}. ${controls}\n` +
@@ -320,12 +340,19 @@ export const DenvPlugin: Plugin = async ({ client }) => {
       output: { args: Record<string, unknown> },
     ) => {
       if (input.tool === "bash") {
-        const raw = stripSelfWrap(String(output.args.command ?? ""))
+        const submitted = String(output.args.command ?? "")
+        const raw = stripSelfWrap(submitted)
         const denvCommand = parseDenvSessionCommand(raw, names)
         if (denvCommand) {
-          output.args.command = localPrint(await applyDenvCommand(input.sessionID, denvCommand))
+          const result = await applyDenvCommand(input.sessionID, denvCommand)
+          LOCAL_SHELL_CALLS.add(input.callID)
+          output.args.command = localPrint(result)
           return
         }
+
+        // Recover from commands copied from older transcripts without exposing
+        // the transport wrapper for new commands.
+        if (submitted !== raw) output.args.command = raw
 
         const env = await resolveEnv(input.sessionID)
         if (!env) {
@@ -338,13 +365,6 @@ export const DenvPlugin: Plugin = async ({ client }) => {
         }
 
         const cfg = envs[env]
-        // The session is already inside the droplet. If the agent re-wrapped its
-        // command in our own helper (it imitates the `denv-run <env> '...'` form
-        // it sees rendered in its history), peel the wrapper back off instead of
-        // erroring. Erroring just makes it loop: its transcript still shows
-        // wrapped commands that ran fine, so it keeps reproducing the wrapper and
-        // thrashing against the rejection. Unwrapping makes the rewrite
-        // idempotent — plain or self-wrapped, exactly one wrap runs.
         // A raw self-targeting `ssh` can't be unwrapped reliably, so still block
         // it — otherwise it nests ssh and fails with "Permission denied
         // (publickey)".
@@ -356,9 +376,6 @@ export const DenvPlugin: Plugin = async ({ client }) => {
           )
         }
 
-        // Rewrite to the clean helper; it does the SSH internally so the agent
-        // never sees (and never fights) a raw ssh wrapper.
-        output.args.command = `${DENV_RUN} ${env} ${shSingleQuote(raw)}`
         return
       }
 
@@ -382,6 +399,29 @@ export const DenvPlugin: Plugin = async ({ client }) => {
         )
       }
       // MCP, webfetch, websearch, etc. run locally, untouched.
+    },
+
+    // Route OpenCode's built-in shell executor without mutating its command
+    // arguments. denv-terminal-shell consumes these variables locally and
+    // invokes denv-run only inside the execution boundary.
+    "shell.env": async (
+      input: { cwd: string; sessionID?: string; callID?: string },
+      output: { env: Record<string, string> },
+    ) => {
+      const callID = input.callID
+      if (callID && LOCAL_SHELL_CALLS.delete(callID)) {
+        output.env.DENV_TARGET_ENV = ""
+        return
+      }
+
+      const env = input.sessionID ? await resolveEnv(input.sessionID) : null
+      output.env.DENV_TARGET_ENV = env ?? ""
+      output.env.DENV_ENVS = ENVS_PATH
+      output.env.DENV_RUN = DENV_RUN
+    },
+
+    "tool.execute.after": async (input: { callID: string }) => {
+      LOCAL_SHELL_CALLS.delete(input.callID)
     },
   }
 }

@@ -6,8 +6,8 @@
 
 `opencode-denv` pins individual opencode chat sessions to different remote
 development environments. A session chooses its environment from its title, and
-the plugin rewrites shell commands so they execute on the matching host over
-SSH.
+the plugin routes shell commands to the matching host over SSH without exposing
+the transport command to the agent.
 
 This lets one opencode instance manage multiple isolated remote workspaces
 without swapping terminals, changing global config, or asking the model to
@@ -27,23 +27,21 @@ remember which machine it is using.
 
 Plugin mode is the recommended path.
 
-1. `tool.execute.before` receives each tool call and the current `sessionID`.
+1. The plugin receives each tool call and the current `sessionID`.
 2. The plugin reads the session title and finds the longest matching environment
    name from `denv-envs.json`.
-3. Matching sessions have `bash` commands rewritten to:
-
-   ```bash
-   denv-run <env> '<command>'
-   ```
-
-4. `denv-run` performs the SSH call, base64-wraps the command to preserve
-   quoting, and starts in the configured remote workspace.
+3. The `shell.env` hook passes the selected environment to the configured
+   `denv-terminal-shell` adapter without changing the command sent by the agent.
+4. `denv-terminal-shell` invokes `denv-run` internally. `denv-run` performs the
+   SSH call, base64-wraps the command to preserve quoting, and starts in the
+   configured remote workspace. The transport command is not agent-visible.
 5. File tools such as `read`, `edit`, `grep`, and `glob` are denied in bound
    sessions because opencode cannot redirect those tools to the remote host.
    The agent uses shell commands for remote file inspection and edits instead.
 6. User-opened terminals can use `denv-terminal-shell` as opencode's configured
    shell. It shows an environment picker for interactive terminals and delegates
-   non-interactive `-c` shell tool invocations to normal bash.
+   non-interactive `-c` shell tool invocations to the selected environment or
+   normal local bash.
 7. A system note is injected for bound sessions so the model understands that it
    is already operating inside the selected remote environment.
 
@@ -83,11 +81,12 @@ flowchart LR
   D --> E{Environment match?}
   E -- no --> F[Run locally]
   E -- yes --> G[Inject remote-environment system note]
-  G --> H[Rewrite bash tool call]
-  H --> I[denv-run helper]
-  I --> J[SSH ControlMaster connection]
-  J --> K[Remote workspace]
-  E -- yes --> L[Deny local file tools]
+   G --> H[shell.env target]
+   H --> I[denv-terminal-shell]
+   I --> J[denv-run helper]
+   J --> K[SSH ControlMaster connection]
+   K --> L[Remote workspace]
+   E -- yes --> M[Deny local file tools]
 ```
 
 ## Install plugin mode
@@ -222,6 +221,7 @@ Install dependencies and run validation:
 ```bash
 npm install
 npm test
+npm run test:shell
 npm run typecheck
 npm run shellcheck
 ```

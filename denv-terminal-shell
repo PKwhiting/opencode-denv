@@ -2,13 +2,19 @@
 # denv-terminal-shell
 #
 # Configure opencode's `shell` to this wrapper. Non-interactive shell tool calls
-# arrive as `-c <command>` and are delegated to real bash. Interactive terminal
-# launches arrive with no args and show an environment picker.
+# arrive as `-c <command>` and are delegated to the selected environment when
+# DENV_TARGET_ENV is set, while the original command remains unchanged. Interactive
+# terminal launches arrive with no args and show an environment picker.
 set -euo pipefail
 
 REAL_SHELL="${DENV_REAL_SHELL:-/usr/bin/bash}"
 ENVS="${DENV_ENVS:-$HOME/.config/opencode/denv-envs.json}"
 DENV_SHELL="${DENV_SHELL:-$HOME/.config/opencode/denv-shell}"
+DENV_RUN="${DENV_RUN:-$HOME/.config/opencode/denv-run}"
+
+if [ "$#" -ge 2 ] && { [ "$1" = "-c" ] || [ "$1" = "-lc" ]; } && [ -n "${DENV_TARGET_ENV:-}" ]; then
+  exec "$DENV_RUN" "$DENV_TARGET_ENV" "$2"
+fi
 
 if [ "$#" -gt 0 ]; then
   exec "$REAL_SHELL" "$@"

@@ -2,9 +2,8 @@
 # denv-run <env> <command>
 #
 # Run <command> on the droplet configured for <env>, over a reused SSH
-# connection. The denv opencode plugin rewrites the agent's bash commands into
-# `denv-run <env> '<command>'` so the agent sees a clean wrapper instead of a
-# raw ssh/base64 blob (and doesn't try to "avoid the ssh"). The command is
+# connection. The denv shell adapter invokes this helper internally, so the
+# agent-facing command remains the original shell command. The command is
 # base64-wrapped internally so its quoting can't break the remote shell.
 set -euo pipefail
 

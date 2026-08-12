@@ -6,8 +6,9 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
+    "test:shell": "bash tests/denv-terminal-shell.test.sh",
     "typecheck": "tsc --noEmit",
-    "shellcheck": "shellcheck denv denv-run denv-shell denv-terminal-shell bin/remote-shell"
+    "shellcheck": "shellcheck denv denv-run denv-shell denv-terminal-shell bin/remote-shell tests/denv-terminal-shell.test.sh"
   },
   "devDependencies": {
     "@opencode-ai/plugin": "1.14.20",
